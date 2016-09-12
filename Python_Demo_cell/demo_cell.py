@@ -1,61 +1,57 @@
-import math, random, sys, pylab
-from copy import deepcopy
+import math, random, sys
+import numpy as np
 
-def CellRate(TargetCellLL, ActiveCellLL, L, CellBoundary):  # always >= 0
-    Rate = 0.0  
-    for a in CellBoundary: 
-        for b in CellBoundary:
-            del_x =  TargetCellLL[0] - ActiveCellLL[0] + (a[0] - b[0]) / L
-            del_y =  TargetCellLL[1] - ActiveCellLL[1] + (a[1] - b[1]) / L
-            Rate = max(Rate, PairRate(del_x, del_y, k_max))
-    return Rate
+def norm (x, y):
+    """norm of a two-dimensional vector"""
+    return (x*x + y*y) ** 0.5
 
-def PairRate(del_x, del_y, k_max): # Here for 1/r potential in 2d
+def dist (a, b):
+   """periodic distance between two two-dimensional points a and b"""
+   delta_x = (a[0] - b[0] + 2.5) % 1.0 - 0.5
+   delta_y = (a[1] - b[1] + 2.5) % 1.0 - 0.5
+   return norm (delta_x, delta_y)
+
+def random_exponential (rate):
+    """sample an exponential random number with given rate parameter"""
+    return -math.log (random.uniform (0.0, 1.0)) / rate
+
+def pair_event_rate (delta_x, delta_y):
+    """compute the particle event rate for the 1/r potential in 2D (lattice-screened version)"""
     q = 0.0
-    for ky in range(-k_max, k_max + 1):
-        for kx in range(-k_max, k_max + 1):
-            q += (del_x + kx ) / (
-                 (del_x + kx) ** 2 + (del_y + ky) ** 2) ** (3.0 / 2.0)
-        q += 1.0 / ((del_x + kx + 0.5) ** 2 + (del_y + ky) ** 2) ** (1.0 / 2.0)
-        q -= 1.0 / ((del_x - kx - 0.5) ** 2 + (del_y + ky) ** 2) ** (1.0 / 2.0)
-    return max(0.0, q)
+    for ky in range (-k_max, k_max + 1):
+        for kx in range (-k_max, k_max + 1):
+            q += (delta_x + kx) / norm (delta_x + kx, delta_y + ky) ** 3
+        q += 1.0 / norm (delta_x + kx + 0.5, delta_y + ky)
+        q -= 1.0 / norm (delta_x - kx - 0.5, delta_y + ky)
+    return max (0.0, q)
 
-def CellTranslate(TargetCell, ActiveCell): # TargetCell -> 0 as CellTranslate -> ActiveCell
-    kt_y =  (TargetCell // L) % L
-    kt_x =  (TargetCell - L * kt_y) % L
-    ka_y =  (ActiveCell // L) % L
-    ka_x =  (ActiveCell - L * ka_y) % L
-    delx = (kt_x + ka_x) % L
-    dely = (kt_y + ka_y) % L
-    return delx + dely * L
+def translated_cell (target_cell, active_cell):
+    """translate target_cell with respect to active_cell"""
+    kt_y = target_cell // L
+    kt_x = target_cell  % L
+    ka_y = active_cell // L
+    ka_x = active_cell  % L
+    del_x = (kt_x + ka_x) % L
+    del_y = (kt_y + ka_y) % L
+    return del_x + L*del_y
 
-def CellIt(a): # Cell index for x,y positions
-    return int((a[0] % L) * L) + L * int((a[1] % L) * L)
+def cell_containing (a):
+    """return the index of the cell which contains the point a"""
+    k_x = int (a[0] * L)
+    k_y = int (a[1] * L)
+    return k_x + L*k_y
 
-def CellLimit(CellNumber): # Returns Rightmost x position. Can be used for x and y
-    return (CellNumber % L + 1) / float(L) 
-
-
-def dist(x,y):
-   """periodic distance between two two-dimensional points x and y"""
-   d_x= abs(x[0] - y[0]) % 1.0
-   d_x = min(d_x, 1.0 - d_x)
-   d_y= abs(x[1] - y[1]) % 1.0
-   d_y = min(d_y, 1.0 - d_y)
-   return  math.sqrt(d_x**2 + d_y**2)
-
-
-def WalkerSet(pi_in):
-    pi = deepcopy(pi_in)
+def walker_setup (pi):
+    """compute the lookup table for Walker's algorithm"""
     N_walker = len(pi)
     walker_mean = sum(a[0] for a in pi) / float(N_walker)
     long_s = []
     short_s = []
     for p in pi:
         if p[0] > walker_mean:
-            long_s.append(p)
+            long_s.append (p[:])
         else:
-            short_s.append(p)
+            short_s.append (p[:])
     walker_table = []
     for k in range(N_walker - 1):
         e_plus = long_s.pop()
@@ -72,166 +68,186 @@ def WalkerSet(pi_in):
         walker_table.append((short_s[0][0], short_s[0][1], short_s[0][1]))
     return N_walker, walker_mean, walker_table
 
-def WalkerSample(walker_table, walker_mean, N_walker):
-    Upsilon = random.uniform(0.0, walker_mean)
-    i = random.randint(0, N_walker - 1)
+def sample_cell_veto (active_cell):
+    """determine the cell which raised the cell veto"""
+    # first sample the distance vector using Walker's algorithm
+    i = random.randint (0, N_walker - 1)
+    Upsilon = random.uniform (0.0, walker_mean)
     if Upsilon < walker_table[i][0]:
-        return walker_table[i][1]
-    else: return walker_table[i][2]
-
-CellBoundary = []
-NStep = 10 # going around the boundary of a cell (naive)
-for i in range(NStep):
-    x = i / float(NStep)
-    CellBoundary += [(x, 0.0), (1.0, x), (1.0 - x, 1.0), (0.0, 1.0 - x)]
-
-histo = []
-L = 10
-NCell = L ** 2
-NPart = 40
-beta = 1.0
-k_max = 2 # extension of periodic images.
-
-CellLL = [(x / float(L), y / float(L)) for y in range(L) for x in range(L)] 
-CellExclude = [0, 1, L - 1, L, L + 1, 2 * L - 1, NCell - L, NCell - L + 1, NCell - 1]
-QCell = []
-for k in range(NCell):
-    if k in CellExclude: QCell.append([0, k])
-    else: Dummy = QCell.append([CellRate(CellLL[k], (0.0, 0.0), L, 
-            CellBoundary), k])
-QPrime = sum(a[0] for a in QCell) # cell rate
-N_walker, walker_mean, walker_table = WalkerSet(QCell)
-
-Particles = []
-for k in range(NPart):
-    a = (random.uniform(0.0, 1.0), random.uniform(0.0, 1.0))
-    Particles.append(a)
-for iter in range(10000):
-    if random.randint(0,1) == 1:
-        for k in range(NPart):
-            Particles[k] = (Particles[k][1], Particles[k][0])
-    Surplus = []
-    CellOcc = {}
-    ltilde = 0.18
-    for k in range(NPart):
-        a = Particles[k]
-        n_cell = CellIt(a)
-        if not CellOcc.has_key(n_cell):
-            CellOcc[n_cell] = a
-        else:
-            Surplus.append(a)
-    if random.uniform(0.0, 1.0) < len(Surplus) / float(NPart): 
-        ActiveParticle = random.choice(Surplus)
-        Surplus.remove(ActiveParticle) # Active particle into Cell, not into Surplus
-        ActiveCell = CellIt(ActiveParticle)
-        if CellOcc.has_key(ActiveCell):
-            Surplus.append(CellOcc.pop(ActiveCell))  
-        CellOcc[ActiveCell] = ActiveParticle[:]
+        veto_offset = walker_table[i][1]
     else:
-        while True:
-            ActiveCell = random.randint(0, NCell - 1)
-            if CellOcc.has_key(ActiveCell):
-                ActiveParticle = CellOcc[ActiveCell]
-                break
-    ActiveCellLimit = CellLimit(ActiveCell)
-    distance_to_go = ltilde
-    while distance_to_go > 0.0:
-        PossibleActiveParticle= ActiveParticle[:]
-        Possible_distance_to_go = distance_to_go
-        ActiveCellChange = False
-        Lifting = False
-        while True:
-            DistanceLimit = PossibleActiveParticle[0] + Possible_distance_to_go
-            DelS =-math.log(random.uniform(0.0, 1.0)) / QPrime
-            if DistanceLimit < ActiveCellLimit and PossibleActiveParticle[0] + DelS > DistanceLimit:
-                PossibleActiveParticle = (DistanceLimit, PossibleActiveParticle[1])
-                Possible_distance_to_go = 0.0
-                break # Distance-to-go break
-            elif PossibleActiveParticle[0] + DelS > ActiveCellLimit:
-                Possible_distance_to_go -= (ActiveCellLimit - PossibleActiveParticle[0])
-                PossibleActiveParticle = (ActiveCellLimit % 1.0, PossibleActiveParticle[1])
-                ActiveCellChange = True
-                break  #AC break
-            else:
-                PossibleActiveParticle = (PossibleActiveParticle[0] + DelS, PossibleActiveParticle[1])
-                Possible_distance_to_go -= DelS
-                TargetCell = WalkerSample(walker_table, walker_mean, N_walker)
-                cell_rate_active_target = QCell[TargetCell][0]
-                TargetCell = CellTranslate(TargetCell, ActiveCell)
-                if CellOcc.has_key(TargetCell):
-                    TargetParticle = CellOcc[TargetCell]
-                    Ratio = PairRate(TargetParticle[0] - PossibleActiveParticle[0], TargetParticle[1] -
-                                 PossibleActiveParticle[1], k_max) / cell_rate_active_target
-                    delx = (TargetParticle[0] - PossibleActiveParticle[0]) % 1.0
-                    dely = (TargetParticle[1] - PossibleActiveParticle[1]) % 1.0
-                    if random.uniform(0.0, 1.0) < Ratio: 
-                        Lifting = True
-                        break # Lifting break 
-#
-#   here the sr (naive and a bit approximate, as we suppose a constant rate)
-#
-        ToBeChecked = Surplus[:]
-        for ECell in CellExclude: 
-            DummyCell = CellTranslate(ECell, ActiveCell)
-            if CellOcc.has_key(DummyCell):
-                ToBeChecked.append(CellOcc[DummyCell])
-        ToBeChecked.remove(ActiveParticle)
-        DelSMax =  PossibleActiveParticle[0] - ActiveParticle[0]
-        for PossibleTargetParticle in ToBeChecked:
-            QRateLoc = PairRate(PossibleTargetParticle[0] - ActiveParticle[0],
-                   PossibleTargetParticle[1] - ActiveParticle[1], k_max) 
-            if QRateLoc > 0.0: 
-                DelS =-math.log(random.uniform(0.0, 1.0)) / QRateLoc
-                if DelS < DelSMax: # Displacement cannot
-#                       interfere with cell boundaries or distance_to_go
-                    Lifting = True
-                    ActiveCellChange = False
-                    Possible_distance_to_go = distance_to_go - DelS
-                    DelSMax = DelS
-                    TargetParticle = PossibleTargetParticle[:] # have to take into
-#                       account that the TargetParticle may be a Surplus one...
-                    PossibleActiveParticle = (ActiveParticle[0] + DelS,
-                                    PossibleActiveParticle[1])
+        veto_offset = walker_table[i][2]
+    # translate with respect to active cell
+    veto_rate = Q_cell[veto_offset][0]
+    vetoing_cell = translated_cell (veto_offset, active_cell)
+    return vetoing_cell, veto_rate
 
-        ActiveParticle = PossibleActiveParticle[:] #First move, then lift
-        distance_to_go = Possible_distance_to_go
-        if ActiveCellChange:
-            NewActiveCell = CellIt((ActiveParticle[0] + 0.001, ActiveParticle[1])) # Naive
-            if CellOcc.has_key(NewActiveCell):
-                Surplus.append(CellOcc.pop(NewActiveCell))
-            CellOcc[NewActiveCell] = ActiveParticle[:]
-            CellOcc.pop(ActiveCell)  # Active cell occupied by active particle
-            for a in Surplus:
-                if CellIt(a) == ActiveCell:
-                    CellOcc[ActiveCell] = a
-                    Surplus.remove(a)
-                    break
-            ActiveCell = NewActiveCell 
-            ActiveCellLimit = CellLimit(ActiveCell)
+
+N = 40
+k_max = 3 # extension of periodic images.
+chain_ell = 0.18  # displacement during one chain
+L = 10  # number of cells along each dimension
+density = N / 1.
+cell_side = 1.0 / L
+
+# precompute the cell-veto rates
+cell_boundary = []
+cb_discret = 10 # going around the boundary of a cell (naive)
+for i in range (cb_discret):
+    x = i / float (cb_discret)
+    cell_boundary += [(x*cell_side, 0.0), (cell_side, x*cell_side),
+                      (cell_side - x*cell_side, cell_side),
+                      (0.0, cell_side - x*cell_side)]
+
+excluded_cells = [ del_x + L*del_y for del_x in (0, 1, L-1) \
+                                   for del_y in (0, 1, L-1) ]
+Q_cell = []
+
+for del_y in xrange (L):
+    for del_x in xrange (L):
+        k = del_x + L*del_y
+        Q = 0.0
+        # "nearby" cells have no cell vetos
+        if k not in excluded_cells:
+            # scan the cell boundaries of both active and target cells
+            # to find the maximum of event rate
+            for delta_a in cell_boundary:
+                for delta_t in cell_boundary:
+                    delta_x = del_x*cell_side + delta_t[0] - delta_a[0]
+                    delta_y = del_y*cell_side + delta_t[1] - delta_a[1]
+                    Q = max (Q, pair_event_rate (delta_x, delta_y))
+        Q_cell.append ([Q, k])
+
+Q_tot = sum (a[0] for a in Q_cell)
+N_walker, walker_mean, walker_table = walker_setup (Q_cell)
+
+# histogram for computing g(r)
+hbins = 50
+histo = np.zeros (hbins)
+histo_binwid = .5 / hbins
+hsamples = 0
+
+# random initial configuration
+particles = [ (random.uniform (0.0, 1.0), random.uniform (0.0, 1.0))
+    for _ in xrange (N) ]
+
+for iter in xrange (250000):
+    if iter % 100 == 0:
+        print iter
+
+    # possibly exchange x and y coordinates for ergodicity
+    if random.randint(0,1) == 1:
+        particles = [ (y,x) for (x,y) in particles ]
+    # pick active particle for first move
+    active_particle = random.choice (particles)
+    particles.remove (active_particle)
+    active_cell = cell_containing (active_particle)
+    # put particles into cells
+    surplus = []
+    cell_occupant = [ None ] * L * L
+    for part in particles:
+        k = cell_containing (part)
+        if cell_occupant[k] is None:
+            cell_occupant[k] = part
         else:
-            CellOcc[ActiveCell] = ActiveParticle[:]
-        if Lifting:
-            if TargetParticle in Surplus:
-                TargetCell = CellIt(TargetParticle)
-                Surplus.remove(TargetParticle)
-                if CellOcc.has_key(TargetCell):
-                    Surplus.append(CellOcc.pop(TargetCell))
-                CellOcc[TargetCell] = TargetParticle[:]
-            ActiveParticle = TargetParticle[:]
-            ActiveCell = CellIt(ActiveParticle) # Naive , zu verbessern
-            ActiveCellLimit = CellLimit(ActiveCell)
-#   Naive, Particles vector for x <-> y transfer
-    Particles = []
-    for k in range(NCell):
-        if CellOcc.has_key(k):
-            Particles.append(CellOcc[k])
-    Particles += Surplus 
-    for k in range(NPart):
-        for l in range(k):
-            histo.append(dist(Particles[k], Particles[l]))
+            surplus.append (part)
 
-pylab.hist(histo, bins=100, range=(0.0, 1.0), normed=True)
-pylab.title('Demo_cell, ECMC, $k_{\max}$ = ' + str(k_max) + ' $NPart$ = ' +
-             str(NPart))
-pylab.savefig('eventchain.png')
-pylab.show()
+    # run one event chain
+    distance_to_go = chain_ell
+    while distance_to_go > 0.0:
+        planned_event_type = 'end-of-chain'
+        planned_displacement = distance_to_go
+        target_particle = None
+        target_cell = None
+
+        active_cell_limit = cell_side * (active_cell % L + 1)
+        if active_cell_limit - active_particle[0] <= planned_displacement:
+            planned_event_type = 'active-cell-change'
+            planned_displacement = active_cell_limit - active_particle[0]
+
+        delta_s = random_exponential (Q_tot)
+        while delta_s < planned_displacement:
+            vetoing_cell, veto_rate = sample_cell_veto (active_cell)
+            part = cell_occupant[vetoing_cell]
+            if part is not None:
+                Ratio = pair_event_rate (part[0] - active_particle[0] - delta_s, \
+                                         part[1] - active_particle[1])           \
+                        / veto_rate
+                if random.uniform (0.0, 1.0) < Ratio:
+                    planned_event_type = 'particle'
+                    planned_displacement = delta_s
+                    target_particle = part
+                    target_cell = vetoing_cell
+                    break
+            delta_s += random_exponential (Q_tot)
+
+        # compile the list of particles that need separate treatment
+        extra_particles = surplus[:]
+        for k in excluded_cells: 
+            part = cell_occupant[translated_cell (k, active_cell)]
+            if part is not None:
+                extra_particles.append (part)
+
+        # naive version of the short-range code by discretization
+        delta_s = 0.0
+        short_range_step = 1e-3
+        while delta_s < planned_displacement:
+            for possible_target_particle in extra_particles:
+                # this supposes a constant event rate over the time interval
+                # [delta_s:delta_s+short_range_step]
+                q = pair_event_rate (possible_target_particle[0] - active_particle[0] - delta_s,
+                                     possible_target_particle[1] - active_particle[1])
+                if q > 0.0:
+                    event_time = random_exponential (q)
+                    if event_time < short_range_step and delta_s + event_time < planned_displacement:
+                        planned_event_type = 'particle'
+                        planned_displacement = delta_s + event_time
+                        target_particle = possible_target_particle
+                        target_cell = cell_containing (target_particle)
+                        break
+            delta_s += short_range_step
+
+        # advance active particle
+        distance_to_go -= planned_displacement
+        new_x = active_particle[0] + planned_displacement
+        active_particle = (new_x % 1.0, active_particle[1])
+
+        if planned_event_type == 'active-cell-change':
+            ac_x = (active_cell_limit + 0.5*cell_side) % 1.0
+            active_cell = cell_containing ([ac_x, active_particle[1]])
+            active_particle = (active_cell % L * cell_side, active_particle[1])
+
+        elif planned_event_type == 'particle':
+            # remove newly active particle from store
+            if target_particle in surplus:
+                surplus.remove (target_particle)
+            else:
+                cell_occupant[target_cell] = None
+            # put the previously active particle in the store
+            if cell_occupant[active_cell] is not None:
+                surplus.append (active_particle)
+            else:
+                cell_occupant[active_cell] = active_particle
+            active_particle = target_particle
+            active_cell = cell_containing (active_particle)
+
+    # restore particles vector for x <-> y transfer
+    particles = [ active_particle ]
+    particles += [ part for part in cell_occupant if part is not None ]
+    particles += surplus
+
+    # form histogram for computing radial distribution function g(r)
+    for k in range (len (particles)):
+        for l in range (k):
+            ibin = int (dist (particles[k], particles[l]) / histo_binwid)
+            if ibin < len (histo):
+                histo[ibin] += 1
+        hsamples += 1
+
+# compute g(r) from histogram
+half_bin = .5 * histo_binwid
+r = np.arange (0., hbins) * histo_binwid + half_bin
+g_of_r = histo / density / hsamples * 2
+g_of_r /= math.pi * ((r+half_bin)**2 - (r-half_bin)**2)
+# save g(r)
+np.savetxt ('cvmc-radial-distr-func.dat', zip (r, g_of_r))
