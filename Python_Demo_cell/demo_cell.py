@@ -21,8 +21,8 @@ def pair_event_rate (delta_x, delta_y):
     for ky in range (-k_max, k_max + 1):
         for kx in range (-k_max, k_max + 1):
             q += (delta_x + kx) / norm (delta_x + kx, delta_y + ky) ** 3
-        q += 1.0 / norm (delta_x + kx + 0.5, delta_y + ky)
-        q -= 1.0 / norm (delta_x - kx - 0.5, delta_y + ky)
+        q += 1.0 / norm (delta_x + k_max + 0.5, delta_y + ky)
+        q -= 1.0 / norm (delta_x - k_max - 0.5, delta_y + ky)
     return max (0.0, q)
 
 def translated_cell (target_cell, active_cell):
